@@ -147,8 +147,8 @@ class CleanVoiceAssistant:
         try:
             audio_data, sample_rate = self.audio_recorder.record_until_silence(
                 max_duration=max_duration,
-                silence_threshold=0.01,
-                silence_duration=1.0
+                silence_threshold=0.05,
+                silence_duration=1.5
             )
             return audio_data, sample_rate
         except Exception as e:
@@ -322,7 +322,7 @@ class CleanVoiceAssistant:
             
             # Record the user's command
             audio_data, sample_rate = self.record_command()
-            if not audio_data:
+            if audio_data is None or len(audio_data) == 0:
                 self.tts.speak("I didn't hear anything")
                 return
             
@@ -334,7 +334,8 @@ class CleanVoiceAssistant:
             
             # Process command
             route_type, response = self.process_command(command_text)
-            
+            print(f"🤖 Response [{route_type}]: {response[:120]}...")
+
             if route_type == "shutdown":
                 self.tts.speak(response)
                 self.shutdown()
@@ -361,7 +362,9 @@ class CleanVoiceAssistant:
                 self._continue_conversation()
         
         except Exception as e:
+            import traceback
             print(f"Command handling error: {e}")
+            traceback.print_exc()
             self.tts.speak("Sorry, I had trouble processing that")
         finally:
             self.is_processing = False
@@ -373,13 +376,12 @@ class CleanVoiceAssistant:
         while self.conversation_manager.is_conversational_mode():
             # Listen for the answer
             audio_data, sample_rate = self.record_command(conversational=True)
-            if not audio_data:
+            if audio_data is None or len(audio_data) == 0:
                 break
             
             answer_text = self.speech_recognizer.recognize(audio_data, sample_rate)
             if not answer_text:
-                self.tts.speak("I couldn't understand that")
-                continue
+                break
             
             print(f"📝 User answered: '{answer_text}'")
             

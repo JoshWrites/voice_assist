@@ -78,26 +78,31 @@ class InterruptibleTTS:
         try:
             if not self.audio_input:
                 self.audio_input = AudioFactory.create_input("pyaudio", channels=1, sample_rate=16000)
-            
+
             self.audio_input.start_stream()
-            
+
+            # Wait for TTS to get started before listening — avoids self-triggering
+            time.sleep(1.5)
+
+            # Accumulate ~1 second of audio per detection pass for reliable recognition
+            chunks_per_pass = 16  # 16 * 1024 frames @ 16kHz ≈ 1 second
+            buffer = b""
+
             while not stop_speaking.is_set():
                 try:
-                    # Read audio chunk
                     data = self.audio_input.read_chunk(1024)
-                    
-                    # Check for interruption using provided detector
-                    if detector and detector(data):
-                        interruption_queue.put(True)
-                        break
-                        
+                    buffer += data
+
+                    if len(buffer) >= 1024 * chunks_per_pass:
+                        if detector and detector(buffer):
+                            interruption_queue.put(True)
+                            break
+                        buffer = b""
+
                 except Exception as e:
                     print(f"Interruption detection error: {e}")
                     break
-                
-                # Small delay to prevent excessive CPU usage
-                time.sleep(0.1)
-        
+
         except Exception as e:
             print(f"Interruption listener setup error: {e}")
         finally:

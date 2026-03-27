@@ -84,21 +84,32 @@ class ResourceManager(ResourceManagerInterface):
             result = subprocess.run([
                 'rocm-smi', '--showmeminfo', 'vram'
             ], capture_output=True, text=True)
-            
+
             if result.returncode == 0:
-                # Parse AMD GPU memory info (simplified)
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if 'Total' in line and 'MB' in line:
-                        # Extract memory value (this is a simplified parser)
-                        import re
-                        match = re.search(r'(\d+)\s*MB', line)
-                        if match:
-                            total = int(match.group(1))
-                            # Assume 80% availability for simplicity
-                            available = int(total * 0.8)
-                            print(f"🔴 AMD GPU detected: ~{available}MB available")
-                            return available
+                import re
+                # Parse per-GPU totals and find the one with most available VRAM
+                gpu_total = {}
+                gpu_used = {}
+                for line in result.stdout.split('\n'):
+                    m = re.search(r'GPU\[(\d+)\].*VRAM Total Memory \(B\):\s*(\d+)', line)
+                    if m:
+                        gpu_total[m.group(1)] = int(m.group(2))
+                    m = re.search(r'GPU\[(\d+)\].*VRAM Total Used Memory \(B\):\s*(\d+)', line)
+                    if m:
+                        gpu_used[m.group(1)] = int(m.group(2))
+                best_available = 0
+                best_gpu = None
+                for gpu_id, total in gpu_total.items():
+                    used = gpu_used.get(gpu_id, 0)
+                    available = total - used
+                    if available > best_available:
+                        best_available = available
+                        best_gpu = gpu_id
+                if best_gpu is not None:
+                    available_mb = best_available // (1024 * 1024)
+                    total_mb = gpu_total[best_gpu] // (1024 * 1024)
+                    print(f"🔴 AMD GPU[{best_gpu}] selected: {available_mb}MB available ({total_mb}MB total)")
+                    return available_mb
         except FileNotFoundError:
             pass
         

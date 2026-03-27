@@ -57,7 +57,7 @@ class MathHandler(CommandHandlerInterface):
     def can_handle(self, text: str) -> bool:
         """Check if this is a math query"""
         text_lower = text.lower()
-        math_keywords = ['plus', 'minus', 'times', 'divided', 'calculate', 'math', 'what is']
+        math_keywords = ['plus', 'minus', 'times', 'divided', 'calculate', 'math']
         has_math_keyword = any(keyword in text_lower for keyword in math_keywords)
         
         # Also check for numbers and operators
@@ -146,8 +146,10 @@ class ConversionHandler(CommandHandlerInterface):
     def can_handle(self, text: str) -> bool:
         """Check if this is a conversion query"""
         text_lower = text.lower()
-        conversion_keywords = ['convert', 'to', 'fahrenheit', 'celsius', 'feet', 'meters', 'miles', 'kilometers', 'pounds', 'kilograms']
-        return any(keyword in text_lower for keyword in conversion_keywords)
+        unit_keywords = ['fahrenheit', 'celsius', 'feet', 'meters', 'miles', 'kilometers', 'pounds', 'kilograms']
+        has_unit = any(keyword in text_lower for keyword in unit_keywords)
+        has_number = bool(re.search(r'\d+', text))
+        return has_unit and has_number
     
     def handle(self, text: str) -> CommandResult:
         """Perform unit conversion"""

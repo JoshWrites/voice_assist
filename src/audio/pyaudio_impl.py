@@ -17,11 +17,13 @@ class PyAudioInput(AudioInputInterface):
         self.channels = channels
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
-        self.audio = pyaudio.PyAudio()
+        self.audio = None  # lazily initialized on first use
         self.stream = None
         
     def start_stream(self) -> None:
         """Start the audio input stream"""
+        if self.audio is None:
+            self.audio = pyaudio.PyAudio()
         if self.stream is None or not self.stream.is_active():
             self.stream = self.audio.open(
                 format=pyaudio.paInt16,
@@ -52,7 +54,8 @@ class PyAudioInput(AudioInputInterface):
     def __del__(self):
         """Cleanup resources"""
         self.stop_stream()
-        self.audio.terminate()
+        if self.audio:
+            self.audio.terminate()
 
 
 class PyAudioOutput(AudioOutputInterface):
@@ -129,11 +132,16 @@ class PyAudioRecorder(AudioRecorderInterface):
                  channels: int = 1):
         self.device_index = device_index
         self.channels = channels
-        self.audio = pyaudio.PyAudio()
-        
+        self.audio = None  # lazily initialized on first use
+
+    def _get_audio(self):
+        if self.audio is None:
+            self.audio = pyaudio.PyAudio()
+        return self.audio
+
     def record(self, duration: float, sample_rate: int = 16000) -> Tuple[np.ndarray, int]:
         """Record audio for specified duration"""
-        stream = self.audio.open(
+        stream = self._get_audio().open(
             format=pyaudio.paInt16,
             channels=self.channels,
             rate=sample_rate,
@@ -164,7 +172,7 @@ class PyAudioRecorder(AudioRecorderInterface):
                            silence_duration: float = 1.0) -> Tuple[np.ndarray, int]:
         """Record until silence is detected"""
         sample_rate = 16000
-        stream = self.audio.open(
+        stream = self._get_audio().open(
             format=pyaudio.paInt16,
             channels=self.channels,
             rate=sample_rate,
@@ -178,15 +186,25 @@ class PyAudioRecorder(AudioRecorderInterface):
         silence_chunks = int(silence_duration * sample_rate / chunk_size)
         consecutive_silence = 0
         max_chunks = int(max_duration * sample_rate / chunk_size)
-        
+        # Wait for speech to start before applying silence detection (min 0.5s)
+        min_speech_chunks = int(0.5 * sample_rate / chunk_size)
+        speech_started = False
+
         for i in range(max_chunks):
             data = stream.read(chunk_size)
             frames.append(data)
-            
-            # Check for silence
+
             audio_chunk = np.frombuffer(data, dtype=np.int16)
             volume = np.abs(audio_chunk).mean() / 32768.0
-            
+
+            if not speech_started:
+                if volume >= silence_threshold:
+                    speech_started = True
+                elif i >= min_speech_chunks * 4:
+                    # No speech detected after 2 seconds — return empty
+                    break
+                continue
+
             if volume < silence_threshold:
                 consecutive_silence += 1
                 if consecutive_silence >= silence_chunks:
@@ -205,4 +223,5 @@ class PyAudioRecorder(AudioRecorderInterface):
     
     def __del__(self):
         """Cleanup resources"""
-        self.audio.terminate()
+        if self.audio:
+            self.audio.terminate()

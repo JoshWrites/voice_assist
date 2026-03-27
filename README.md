@@ -197,8 +197,8 @@ chmod +x setup_piper.sh
 # Activate virtual environment
 source voice_assistant_env/bin/activate
 
-# Test import (should show no errors)
-python3 -c "from voice_assistant_clean import CleanVoiceAssistant; print('✅ Installation successful')"
+# Verify all components
+python3 verify_installation.py
 
 # Check audio devices
 arecord -l  # Should list microphones

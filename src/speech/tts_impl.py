@@ -5,6 +5,9 @@ import os
 import queue
 import re
 import time
+import wave
+import io
+import struct
 from typing import Optional, List, Callable
 from .interfaces import TextToSpeechInterface
 
@@ -19,22 +22,44 @@ class EspeakTTS(TextToSpeechInterface):
         self.is_speaking_flag = False
         self.speaking_lock = threading.Lock()
     
+    def _play_wav_bytes(self, wav_data: bytes) -> None:
+        """Play WAV bytes via PyAudio (shares PipeWire session with rest of app)"""
+        import pyaudio
+        with wave.open(io.BytesIO(wav_data)) as wf:
+            p = pyaudio.PyAudio()
+            stream = p.open(
+                format=p.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True,
+            )
+            chunk = 1024
+            data = wf.readframes(chunk)
+            while data and self.is_speaking_flag:
+                stream.write(data)
+                data = wf.readframes(chunk)
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
     def speak(self, text: str) -> None:
         """Convert text to speech and play it"""
+        # Stop any current speech without holding the lock (stop_speaking acquires it)
+        self.stop_speaking()
         with self.speaking_lock:
-            self.stop_speaking()
             self.is_speaking_flag = True
-            
+
         try:
-            self.current_process = subprocess.Popen([
+            # Generate WAV audio from espeak
+            result = subprocess.run([
                 'espeak',
                 '-s', str(self.speed),
                 '-v', self.voice,
+                '--stdout',
                 text
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            self.current_process.wait()
-            
+            ], capture_output=True)
+            if result.returncode == 0 and result.stdout:
+                self._play_wav_bytes(result.stdout)
         finally:
             with self.speaking_lock:
                 self.is_speaking_flag = False

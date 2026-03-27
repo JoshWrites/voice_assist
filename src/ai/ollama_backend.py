@@ -94,10 +94,24 @@ class OllamaBackend(AIBackendInterface):
                 error=str(e)
             )
     
+    def unload_models(self) -> None:
+        """Unload all loaded models from VRAM"""
+        try:
+            models = self.list_models()
+            for model in models:
+                requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": model.name, "keep_alive": 0},
+                    timeout=10
+                )
+                print(f"🧹 Unloaded {model.name} from VRAM")
+        except Exception as e:
+            print(f"Warning: could not unload models from VRAM: {e}")
+
     def get_backend_name(self) -> str:
         """Get the name of the backend"""
         return self.backend_name
-    
+
     def get_backend_url(self) -> str:
         """Get the URL of the backend"""
         return self.base_url

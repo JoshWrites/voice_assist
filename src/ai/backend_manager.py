@@ -94,6 +94,9 @@ class AIBackendManager(AIBackendManagerInterface):
     
     def stop_backend(self) -> None:
         """Stop the running backend"""
+        # Unload models from VRAM before stopping
+        if self.current_backend and hasattr(self.current_backend, 'unload_models'):
+            self.current_backend.unload_models()
         if self.backend_process:
             self.backend_process.terminate()
             self.backend_process.wait(timeout=5)

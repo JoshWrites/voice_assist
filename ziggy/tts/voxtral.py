@@ -10,7 +10,7 @@ from ziggy.tts import TTSEngine
 
 MODEL_ID = "mistralai/Voxtral-4B-TTS-2603"
 DEFAULT_VOICE = "casual_male"
-DEFAULT_URL = "http://localhost:8000"
+DEFAULT_URL = "http://localhost:8091"
 
 
 class VoxtralTTS(TTSEngine):

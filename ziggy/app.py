@@ -26,6 +26,7 @@ from ziggy.tools import ToolRegistry
 from ziggy.tools import time_date as time_date_tools
 from ziggy.tools import conversions as conversion_tools
 from ziggy.tools import web_search as web_search_tools
+from ziggy.tools import weather as weather_tools
 
 
 class VoiceAssistant:
@@ -144,6 +145,7 @@ class VoiceAssistant:
         """Register all built-in tools."""
         time_date_tools.register(self.tools)
         conversion_tools.register(self.tools)
+        weather_tools.register(self.tools)
         web_search_tools.register(
             self.tools,
             speak_fn=self.speak,

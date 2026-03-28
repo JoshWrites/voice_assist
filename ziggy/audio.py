@@ -9,6 +9,7 @@ from ziggy.config import (
     AUDIO_SAMPLE_RATE,
     AUDIO_CHUNK_SIZE,
     AUDIO_CHANNELS,
+    AUDIO_INPUT_DEVICE,
     SILENCE_THRESHOLD,
     WAKE_WORD,
     SHUTDOWN_PHRASE,
@@ -23,15 +24,49 @@ class AudioManager:
         self.channels = AUDIO_CHANNELS
         self.format = pyaudio.paInt16
         self.audio = None
+        self.input_device = AUDIO_INPUT_DEVICE
 
     def setup(self) -> bool:
         try:
             self.audio = pyaudio.PyAudio()
+            if self.input_device is None:
+                self.input_device = self._find_best_input()
+            if self.input_device is not None:
+                name = self.audio.get_device_info_by_index(self.input_device)["name"]
+                print(f"  Audio input: {name} (device {self.input_device})")
+            else:
+                print("  Audio input: system default")
             print("  Audio system initialized")
             return True
         except Exception as e:
             print(f"  Audio init failed: {e}")
             return False
+
+    def _find_best_input(self):
+        """Pick the first USB mic, preferring webcam/headset over onboard."""
+        usb_devices = []
+        for i in range(self.audio.get_device_count()):
+            info = self.audio.get_device_info_by_index(i)
+            if info["maxInputChannels"] > 0 and "hw:" in info["name"]:
+                name = info["name"].lower()
+                if "webcam" in name or "usb" in name or "jabra" in name:
+                    usb_devices.append((i, info["name"]))
+        if usb_devices:
+            return usb_devices[0][0]
+        return None
+
+    def _open_input_stream(self):
+        """Open an audio input stream on the configured device."""
+        kwargs = dict(
+            format=self.format,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+        )
+        if self.input_device is not None:
+            kwargs["input_device_index"] = self.input_device
+        return self.audio.open(**kwargs)
 
     def get_sample_size(self):
         return self.audio.get_sample_size(self.format)
@@ -44,13 +79,7 @@ class AudioManager:
             else:
                 print("  Recording until pause detected...")
 
-            stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-            )
+            stream = self._open_input_stream()
 
             frames = []
             recognizer = self.stt.create_recognizer()
@@ -114,13 +143,7 @@ class AudioManager:
         try:
             if not self.audio:
                 self.audio = pyaudio.PyAudio()
-            stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-            )
+            stream = self._open_input_stream()
             frames = []
             for _ in range(0, int(self.sample_rate / self.chunk_size * seconds)):
                 data = stream.read(self.chunk_size, exception_on_overflow=False)
@@ -145,13 +168,7 @@ class AudioManager:
                 stream = None
                 for attempt in range(3):
                     try:
-                        stream = self.audio.open(
-                            format=self.format,
-                            channels=self.channels,
-                            rate=self.sample_rate,
-                            input=True,
-                            frames_per_buffer=self.chunk_size,
-                        )
+                        stream = self._open_input_stream()
                         break
                     except Exception as e:
                         print(f"Audio stream attempt {attempt + 1} failed: {e}")
@@ -169,16 +186,20 @@ class AudioManager:
                         data = stream.read(self.chunk_size, exception_on_overflow=False)
                         if recognizer.AcceptWaveform(data):
                             result = json.loads(recognizer.Result())
-                            if result.get("text"):
-                                transcript = result["text"].lower().strip()
-                                if WAKE_WORD in transcript:
-                                    print(f"  Wake word detected: '{transcript}'")
-                                    stream.close()
-                                    return True
-                                if SHUTDOWN_PHRASE in transcript:
-                                    print(f"  Shutdown detected: '{transcript}'")
-                                    stream.close()
-                                    return "shutdown"
+                            text = result.get("text", "").lower().strip()
+                        else:
+                            partial = json.loads(recognizer.PartialResult())
+                            text = partial.get("partial", "").lower().strip()
+
+                        if text:
+                            if WAKE_WORD in text:
+                                print(f"  Wake word detected: '{text}'")
+                                stream.close()
+                                return True
+                            if SHUTDOWN_PHRASE in text:
+                                print(f"  Shutdown detected: '{text}'")
+                                stream.close()
+                                return "shutdown"
                     except Exception as e:
                         if is_listening_fn():
                             print(f"  Audio read error: {e}")
@@ -202,28 +223,35 @@ class AudioManager:
         """Background thread: listen for wake word during speech."""
         try:
             recognizer = self.stt.create_recognizer()
-            stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-            )
+            stream = self._open_input_stream()
+
+            # Wait for TTS to start before listening — avoids self-triggering
+            time.sleep(1.5)
+
+            # Buffer ~1 second of audio per detection pass for reliable recognition
+            chunks_per_pass = max(1, int(self.sample_rate / self.chunk_size))
+            buffer = b""
+
             while not stop_event.is_set():
                 try:
                     data = stream.read(self.chunk_size, exception_on_overflow=False)
-                    if recognizer.AcceptWaveform(data):
-                        result = json.loads(recognizer.Result())
-                        if result.get("text"):
-                            transcript = result["text"].lower().strip()
-                            if WAKE_WORD in transcript:
-                                interruption_queue.put(True)
-                                stop_event.set()
-                                break
+                    buffer += data
+
+                    if len(buffer) >= self.chunk_size * chunks_per_pass:
+                        if recognizer.AcceptWaveform(buffer):
+                            result = json.loads(recognizer.Result())
+                            if result.get("text"):
+                                transcript = result["text"].lower().strip()
+                                if WAKE_WORD in transcript:
+                                    interruption_queue.put(True)
+                                    stop_event.set()
+                                    break
+                        buffer = b""
+
                 except Exception as e:
                     if not stop_event.is_set():
                         print(f"Interruption listening error: {e}")
-                        time.sleep(0.1)
+                        break
             stream.close()
         except Exception as e:
             print(f"Interruption listener error: {e}")

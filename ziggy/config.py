@@ -53,6 +53,7 @@ SHUTDOWN_PHRASE = "take a break"
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHUNK_SIZE = 4000
 AUDIO_CHANNELS = 1
+AUDIO_INPUT_DEVICE = 7  # HD Pro Webcam C920 (hw:2,0); set to None for system default
 
 SILENCE_THRESHOLD = 1.5  # seconds of silence before stopping recording
 

@@ -105,7 +105,7 @@ def _detect_gpu_memory():
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total,memory.used",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, stderr=subprocess.DEVNULL,
+            capture_output=True, text=True,
         )
         if result.returncode == 0 and result.stdout.strip():
             line = result.stdout.strip().split("\n")[0]
@@ -116,21 +116,36 @@ def _detect_gpu_memory():
     except Exception:
         pass
 
-    # AMD ROCm
+    # AMD ROCm — pick the GPU with the most available VRAM
     try:
-        if subprocess.run(["which", "rocm-smi"], capture_output=True, stderr=subprocess.DEVNULL).returncode == 0:
+        if subprocess.run(["which", "rocm-smi"], capture_output=True).returncode == 0:
             result = subprocess.run(
                 ["rocm-smi", "--showmeminfo", "vram"],
-                capture_output=True, text=True, stderr=subprocess.DEVNULL,
+                capture_output=True, text=True,
             )
             if result.returncode == 0 and result.stdout:
+                gpu_total = {}
+                gpu_used = {}
                 for line in result.stdout.split("\n"):
-                    if "VRAM Total Memory (B):" in line:
-                        match = re.search(r":\s*(\d+)", line)
-                        if match:
-                            mb = int(match.group(1)) // (1024 * 1024)
-                            print(f"  AMD GPU detected: {mb}MB total ({mb / 1024:.1f}GB)")
-                            return mb
+                    m = re.search(r"GPU\[(\d+)\].*VRAM Total Memory \(B\):\s*(\d+)", line)
+                    if m:
+                        gpu_total[m.group(1)] = int(m.group(2))
+                    m = re.search(r"GPU\[(\d+)\].*VRAM Total Used Memory \(B\):\s*(\d+)", line)
+                    if m:
+                        gpu_used[m.group(1)] = int(m.group(2))
+                best_available = 0
+                best_gpu = None
+                for gpu_id, total in gpu_total.items():
+                    used = gpu_used.get(gpu_id, 0)
+                    avail = total - used
+                    if avail > best_available:
+                        best_available = avail
+                        best_gpu = gpu_id
+                if best_gpu is not None:
+                    available_mb = best_available // (1024 * 1024)
+                    total_mb = gpu_total[best_gpu] // (1024 * 1024)
+                    print(f"  AMD GPU[{best_gpu}] selected: {available_mb}MB available ({total_mb}MB total)")
+                    return available_mb
     except Exception:
         pass
 

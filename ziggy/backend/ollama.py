@@ -92,7 +92,23 @@ class OllamaBackend(LLMBackend):
             print(f"Ollama query error: {e}")
             return None
 
+    def unload_models(self):
+        """Unload all loaded models from VRAM before stopping."""
+        try:
+            resp = requests.get(f"{self.url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                for model in resp.json().get("models", []):
+                    requests.post(
+                        f"{self.url}/api/generate",
+                        json={"model": model["name"], "keep_alive": 0},
+                        timeout=10,
+                    )
+                    print(f"  Unloaded {model['name']} from VRAM")
+        except Exception as e:
+            print(f"  Warning: could not unload models from VRAM: {e}")
+
     def stop(self):
+        self.unload_models()
         if self._process:
             self._process.terminate()
             try:

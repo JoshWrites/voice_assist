@@ -45,7 +45,17 @@ class QueryRouter:
                 return "local", response
 
         # Default: send to LLM
-        return "ai", self._query_ai_local_only(text)
+        response = self._query_ai_local_only(text)
+
+        # If the LLM says it needs online resources, try web search
+        if "i need online resources" in response.lower():
+            web_tool = self.tools.find_tool("search")
+            if web_tool:
+                web_response = web_tool.handler(text)
+                if web_response is not None:
+                    return "local", web_response
+
+        return "ai", response
 
     def _handle_profile_command(self, text_lower):
         triggers = [

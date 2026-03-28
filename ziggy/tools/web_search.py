@@ -98,8 +98,11 @@ def register(registry, speak_fn, record_fn, stt_fn):
     registry.register(
         name="web_search",
         description="Search the web via DuckDuckGo",
-        keywords=["search", "look up"],
+        keywords=["search", "look up", "go online", "check online"],
         handler=lambda text: tool.search(
-            text.lower().replace("search", "").replace("look up", "").strip()
+            text.lower()
+            .replace("search", "").replace("look up", "")
+            .replace("go online and", "").replace("check online", "")
+            .strip()
         ),
     )

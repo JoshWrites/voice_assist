@@ -23,6 +23,7 @@ from ziggy.backend.ollama import OllamaBackend
 from ziggy.conversation import ConversationManager
 from ziggy.router import QueryRouter
 from ziggy.tools import ToolRegistry
+from ziggy.speaker import SpeakerTracker
 from ziggy.tools import time_date as time_date_tools
 from ziggy.tools import conversions as conversion_tools
 from ziggy.tools import web_search as web_search_tools
@@ -47,6 +48,7 @@ class VoiceAssistant:
         self.conversation = None
         self.router = None
         self.tools = ToolRegistry()
+        self.speaker = None
 
         print("Initializing Ziggy Voice Assistant...")
         self._setup()
@@ -72,6 +74,11 @@ class VoiceAssistant:
 
             self.tts = create_tts_engine(self.profile.settings)
             self.conversation = ConversationManager(self.profile.settings)
+
+            if self.profile.settings.get("speaker_tracking"):
+                self.speaker = SpeakerTracker()
+                if not self.speaker.setup():
+                    self.speaker = None
 
             self._register_tools()
 
@@ -240,13 +247,21 @@ class VoiceAssistant:
                 self.speak("I didn't hear anything", allow_interruption=False)
                 return
 
+            speaker_label = None
+            if self.speaker and self.speaker.is_active():
+                speaker_label = self.speaker.identify(audio_data, self.audio.sample_rate)
+
             command_text = self.stt.transcribe(audio_data, self.audio.get_sample_size())
             if not command_text:
                 self.speak("I couldn't understand that", allow_interruption=False)
                 return
 
-            print(f"Command: '{command_text}'")
-            route_type, response = self.router.route(command_text)
+            if speaker_label:
+                labeled_text = f"{speaker_label}: {command_text}"
+            else:
+                labeled_text = command_text
+            print(f"Command: '{labeled_text}'")
+            route_type, response = self.router.route(command_text, speaker_label=speaker_label)
 
             if route_type == "shutdown":
                 self.speak(response, allow_interruption=False)
@@ -254,12 +269,32 @@ class VoiceAssistant:
                 return
 
             if route_type == "ai":
-                self.conversation.add_exchange(command_text, response)
+                self.conversation.add_exchange(labeled_text, response)
 
             was_interrupted = self.speak(response, allow_interruption=True)
+
+            new_speaker = (
+                speaker_label
+                and speaker_label.startswith("Speaker ")
+                and self.speaker
+                and self.speaker.is_active()
+            )
+
             if was_interrupted:
                 self._handle_voice_command()
                 return
+
+            if new_speaker and not was_interrupted:
+                self.speak("By the way, I don't think we've met. I'm Ziggy — what's your name?",
+                           allow_interruption=False)
+                name_audio = self.audio.record_command(profile_settings=self.profile.settings)
+                if name_audio:
+                    name_text = self.stt.transcribe(name_audio, self.audio.get_sample_size())
+                    if name_text:
+                        name = self._extract_name(name_text)
+                        if name:
+                            self.speaker.set_name(speaker_label, name)
+                            self.speak(f"Nice to meet you, {name}!", allow_interruption=False)
 
             # Conversational follow-up loop
             if _contains_question(response):
@@ -287,11 +322,16 @@ class VoiceAssistant:
             if not audio:
                 break
 
+            speaker_label = None
+            if self.speaker and self.speaker.is_active():
+                speaker_label = self.speaker.identify(audio, self.audio.sample_rate)
+
             text = self.stt.transcribe(audio, self.audio.get_sample_size())
             if not text:
                 break
 
-            print(f"User answered: '{text}'")
+            labeled_text = f"{speaker_label}: {text}" if speaker_label else text
+            print(f"User answered: '{labeled_text}'")
             if SHUTDOWN_PHRASE in text.lower():
                 self.speak("Okay, bye!", allow_interruption=False)
                 self._shutdown()
@@ -307,7 +347,7 @@ class VoiceAssistant:
             if not ai_response:
                 break
 
-            self.conversation.add_exchange(text, ai_response)
+            self.conversation.add_exchange(labeled_text, ai_response)
             was_interrupted = self.speak(ai_response, allow_interruption=True)
 
             if was_interrupted or not _contains_question(ai_response):
@@ -326,6 +366,36 @@ class VoiceAssistant:
         )
         print(msg)
         self.speak(msg, allow_interruption=False)
+
+        if self.speaker and self.speaker.is_active():
+            self.speak("Hi, I'm Ziggy. What's your name?", allow_interruption=False)
+            audio = self.audio.record_command(profile_settings=self.profile.settings)
+            if audio:
+                speaker_label = self.speaker.identify(audio, self.audio.sample_rate)
+                name_text = self.stt.transcribe(audio, self.audio.get_sample_size())
+                if name_text:
+                    name = self._extract_name(name_text)
+                    if name and speaker_label:
+                        self.speaker.set_name(speaker_label, name)
+                        self.speak(f"Nice to meet you, {name}!", allow_interruption=False)
+                    else:
+                        self.speak("Nice to meet you!", allow_interruption=False)
+                else:
+                    self.speak("No worries. Let's get started!", allow_interruption=False)
+
+    @staticmethod
+    def _extract_name(text):
+        """Try to extract a name from a response like 'I'm Josh' or 'my name is Josh'."""
+        text = text.strip()
+        for prefix in ["i'm ", "i am ", "my name is ", "it's ", "they call me ", "name's "]:
+            if text.lower().startswith(prefix):
+                name = text[len(prefix):].strip().split()[0] if text[len(prefix):].strip() else None
+                if name:
+                    return name.capitalize()
+        words = text.split()
+        if 1 <= len(words) <= 2:
+            return " ".join(w.capitalize() for w in words)
+        return None
 
     def _shutdown(self):
         print("Shutting down Ziggy...")

@@ -170,3 +170,37 @@ class TestThinkingMode:
         call_args = router.backend.query.call_args
         messages = call_args[0][0]
         assert not messages[-1]["content"].startswith("/no_think ")
+
+
+class TestSpeakerLabels:
+    def test_route_with_speaker_label(self):
+        router = _make_router()
+        router.conversation.build_messages.return_value = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "Josh: tell me about black holes"},
+        ]
+        route_type, response = router.route("tell me about black holes", speaker_label="Josh")
+        call_args = router.backend.query.call_args
+        messages = call_args[0][0]
+        user_msg = messages[-1]["content"]
+        assert "Josh:" in user_msg
+
+    def test_route_without_speaker_label(self):
+        router = _make_router()
+        router.conversation.build_messages.return_value = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "tell me about black holes"},
+        ]
+        route_type, response = router.route("tell me about black holes")
+        call_args = router.backend.query.call_args
+        messages = call_args[0][0]
+        user_msg = messages[-1]["content"]
+        # No speaker label prefix in the message
+        after_no_think = user_msg.replace("/no_think ", "")
+        assert not after_no_think.startswith("None:")
+
+    def test_tool_routing_ignores_speaker_label(self):
+        router = _make_router()
+        route_type, response = router.route("what time is it", speaker_label="Josh")
+        assert route_type == "local"
+        assert "3pm" in response

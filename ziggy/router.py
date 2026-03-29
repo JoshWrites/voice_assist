@@ -27,7 +27,7 @@ class QueryRouter:
             model_name=self.model,
         )
 
-    def route(self, text):
+    def route(self, text, speaker_label=None):
         """Route a query and return (route_type, response).
 
         route_type is one of: "shutdown", "local", "ai"
@@ -57,7 +57,7 @@ class QueryRouter:
                 return "local", response
 
         # Default: send to LLM
-        response = self._query_ai(text)
+        response = self._query_ai(text, speaker_label=speaker_label)
 
         # If the LLM says it needs online resources, try web search
         if _ONLINE_SENTINEL in response.lower():
@@ -100,12 +100,13 @@ class QueryRouter:
         text_lower = text.lower()
         return any(trigger in text_lower for trigger in THINK_TRIGGERS)
 
-    def _query_ai(self, text):
+    def _query_ai(self, text, speaker_label=None):
         """Send query to the LLM with the unified system prompt."""
         use_thinking = self._should_think(text)
 
         prompt = self.get_system_prompt()
-        messages = self.conversation.build_messages(text, system_prompt=prompt)
+        labeled_text = f"{speaker_label}: {text}" if speaker_label else text
+        messages = self.conversation.build_messages(labeled_text, system_prompt=prompt)
 
         # Prepend /no_think unless the user asked for reasoning
         if not use_thinking:

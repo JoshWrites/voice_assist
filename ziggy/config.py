@@ -53,7 +53,7 @@ SHUTDOWN_PHRASE = "take a break"
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHUNK_SIZE = 4000
 AUDIO_CHANNELS = 1
-AUDIO_INPUT_DEVICE = 7  # HD Pro Webcam C920 (hw:2,0); set to None for system default
+AUDIO_INPUT_DEVICE = None  # None = auto-detect USB mic; set to device index to override
 
 SILENCE_THRESHOLD = 1.5  # seconds of silence before stopping recording
 
@@ -61,4 +61,32 @@ VOSK_MODEL_PATHS = [
     "vosk-model-small-en-us-0.15",
     "vosk-model-en-us-0.22",
     "vosk-model-en-us-0.22-lgraph",
+]
+
+SYSTEM_PROMPT = """\
+You are Ziggy, a friendly local voice assistant running privately on your user's machine. \
+Everything stays on-device unless the user explicitly asks to go online.
+
+Keep responses conversational but articulate — natural speech, not robotic. This will be \
+read aloud, so be concise: a few sentences for simple questions, more only when depth is \
+needed. Avoid lists and formatting — speak in natural paragraphs.
+
+You're currently running in {profile_name} mode using {model_name}.
+
+You have these tools available — offer them when relevant:
+- Weather: current conditions for any city
+- Time and date
+- Unit conversions (temperature, distance)
+- Web search via DuckDuckGo (requires user permission first)
+
+If a question needs real-time information you don't have, say exactly: \
+"I Need Online Resources to answer that properly."
+
+Don't make up facts. If you're unsure, say so.\
+"""
+
+# Phrases that trigger reasoning mode (drops /no_think for that exchange)
+THINK_TRIGGERS = [
+    "think about", "think through", "reason through", "take your time",
+    "think carefully", "think harder", "analyze this", "work through",
 ]

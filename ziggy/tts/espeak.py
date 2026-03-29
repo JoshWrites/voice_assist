@@ -9,7 +9,30 @@ import subprocess
 import threading
 import wave
 
+import pyaudio
+
 from ziggy.tts import TTSEngine
+
+
+class _Player:
+    """Wraps a background audio playback thread with a subprocess-like interface."""
+
+    def __init__(self, target, args):
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(target, args), daemon=True)
+        self._thread.start()
+
+    def _run(self, target, args):
+        try:
+            target(*args)
+        finally:
+            self._done.set()
+
+    def poll(self):
+        return 0 if self._done.is_set() else None
+
+    def terminate(self):
+        self._done.set()
 
 
 class EspeakTTS(TTSEngine):
@@ -17,6 +40,7 @@ class EspeakTTS(TTSEngine):
 
     def __init__(self):
         self._available = False
+        self._pyaudio = None
 
     def setup(self):
         try:
@@ -32,7 +56,13 @@ class EspeakTTS(TTSEngine):
     def is_available(self) -> bool:
         return self._available
 
-    def _generate_wav(self, text: str) -> bytes | None:
+    def _get_pyaudio(self):
+        if self._pyaudio is None:
+            self._pyaudio = pyaudio.PyAudio()
+        return self._pyaudio
+
+    @staticmethod
+    def _generate_wav(text: str) -> bytes | None:
         """Run espeak --stdout and return raw WAV bytes."""
         try:
             result = subprocess.run(
@@ -45,13 +75,10 @@ class EspeakTTS(TTSEngine):
             pass
         return None
 
-    @staticmethod
-    def _play_wav_bytes(wav_data: bytes) -> None:
+    def _play_wav_bytes(self, wav_data: bytes) -> None:
         """Play WAV bytes through PyAudio (shares PipeWire session)."""
-        import pyaudio
-
+        p = self._get_pyaudio()
         with wave.open(io.BytesIO(wav_data)) as wf:
-            p = pyaudio.PyAudio()
             stream = p.open(
                 format=p.get_format_from_width(wf.getsampwidth()),
                 channels=wf.getnchannels(),
@@ -65,7 +92,6 @@ class EspeakTTS(TTSEngine):
                 data = wf.readframes(chunk)
             stream.stop_stream()
             stream.close()
-            p.terminate()
 
     def speak(self, text: str) -> bool:
         wav = self._generate_wav(text)
@@ -78,33 +104,14 @@ class EspeakTTS(TTSEngine):
             return False
 
     def speak_sentence_async(self, sentence: str):
-        """Start speaking in a background thread; return (thread, None).
+        """Start generating and playing in a background thread.
 
-        The caller can check thread.is_alive() and join() — the interface
-        expects a process-like object with .poll() and .terminate(), so we
-        wrap the thread to match.
+        Returns (_Player, None). The caller polls player.poll() and can
+        call player.terminate() for interruption support.
         """
+        return _Player(self._speak_async, (sentence,)), None
+
+    def _speak_async(self, sentence: str):
         wav = self._generate_wav(sentence)
-        if not wav:
-            return None, None
-
-        class _Player:
-            """Thin wrapper so the caller can treat this like a subprocess."""
-            def __init__(self, wav_data, play_fn):
-                self._done = threading.Event()
-                self._thread = threading.Thread(target=self._run, args=(wav_data, play_fn), daemon=True)
-                self._thread.start()
-
-            def _run(self, wav_data, play_fn):
-                try:
-                    play_fn(wav_data)
-                finally:
-                    self._done.set()
-
-            def poll(self):
-                return 0 if self._done.is_set() else None
-
-            def terminate(self):
-                self._done.set()
-
-        return _Player(wav, self._play_wav_bytes), None
+        if wav:
+            self._play_wav_bytes(wav)

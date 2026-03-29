@@ -297,12 +297,9 @@ class VoiceAssistant:
                 self._shutdown()
                 return
 
-            system_prompt = (
-                "You are having a friendly conversation. Respond naturally and keep "
-                "the conversation flowing. Feel free to ask follow-up questions or "
-                "share related thoughts. Be engaging and personable."
+            messages = self.conversation.build_messages(
+                text, system_prompt=self.router.get_system_prompt()
             )
-            messages = self.conversation.build_messages(text, system_prompt=system_prompt)
             ai_response = self.backend.query(
                 messages, self.model, temperature=0.8,
                 max_tokens=self.conversation.profile_settings.get("response_tokens", 1000),

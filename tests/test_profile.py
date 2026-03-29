@@ -66,7 +66,8 @@ class TestProfileManager:
     def test_detect_and_select_minimal(self, mock_run):
         # No GPU found, low RAM fallback
         mock_run.side_effect = FileNotFoundError
-        with patch("ziggy.profile.psutil.virtual_memory") as mock_vm:
+        with patch("ziggy.profile.psutil.virtual_memory") as mock_vm, \
+             patch("ziggy.profile.glob_mod.glob", return_value=[]):
             mock_vm.return_value = MagicMock(total=4 * 1024**3)  # 4GB RAM
             pm = ProfileManager()
             pm.detect_and_select()

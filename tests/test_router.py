@@ -7,7 +7,7 @@ from ziggy.tools import ToolRegistry
 from ziggy.config import RESOURCE_PROFILES
 
 
-def _make_router(backend_response="AI says hello"):
+def _make_router(backend_response="AI says hello", profile_name="standard"):
     tools = ToolRegistry()
     tools.register("time", "Get time", ["time", "clock"], lambda t: "It is 3pm")
 
@@ -15,13 +15,15 @@ def _make_router(backend_response="AI says hello"):
     backend.query.return_value = backend_response
 
     profile = MagicMock()
+    profile.current_profile = profile_name
+    profile.settings = RESOURCE_PROFILES[profile_name].copy()
     profile.switch_profile.return_value = "Switched to Minimal profile."
     profile.describe_current.return_value = "Running Standard mode."
     profile.list_profiles.return_value = "Minimal, Standard, Performance."
     profile.describe_memory.return_value = "Using 4GB of 16GB."
 
     conversation = MagicMock()
-    conversation.profile_settings = RESOURCE_PROFILES["standard"].copy()
+    conversation.profile_settings = RESOURCE_PROFILES[profile_name].copy()
 
     return QueryRouter(tools, backend, "test-model", profile, conversation)
 
@@ -114,3 +116,57 @@ class TestRouterAIFallback:
         route_type, response = router.route("tell me a joke")
         assert route_type == "ai"
         assert "sorry" in response.lower()
+
+
+class TestSystemPrompt:
+    def test_system_prompt_includes_profile_and_model(self):
+        router = _make_router()
+        prompt = router.get_system_prompt()
+        assert "Standard" in prompt
+        assert "test-model" in prompt
+
+    def test_system_prompt_mentions_tools(self):
+        router = _make_router()
+        prompt = router.get_system_prompt()
+        assert "Weather" in prompt
+        assert "Web search" in prompt
+
+
+class TestThinkingMode:
+    def test_think_trigger_in_standard(self):
+        router = _make_router(profile_name="standard")
+        assert router._should_think("think about this problem") is True
+
+    def test_think_trigger_in_performance(self):
+        router = _make_router(profile_name="performance")
+        assert router._should_think("take your time with this") is True
+
+    def test_no_think_trigger_in_minimal(self):
+        router = _make_router(profile_name="minimal")
+        assert router._should_think("think about this") is False
+
+    def test_normal_query_no_think(self):
+        router = _make_router(profile_name="standard")
+        assert router._should_think("what is the capital of France") is False
+
+    def test_no_think_prepended_by_default(self):
+        router = _make_router()
+        router.conversation.build_messages.return_value = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "tell me about black holes"},
+        ]
+        router.route("tell me about black holes")
+        call_args = router.backend.query.call_args
+        messages = call_args[0][0]
+        assert messages[-1]["content"].startswith("/no_think ")
+
+    def test_no_think_not_prepended_when_thinking(self):
+        router = _make_router()
+        router.conversation.build_messages.return_value = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "think about the meaning of life"},
+        ]
+        router.route("think about the meaning of life")
+        call_args = router.backend.query.call_args
+        messages = call_args[0][0]
+        assert not messages[-1]["content"].startswith("/no_think ")

@@ -4,7 +4,12 @@ The router checks tool registry first (local tools), then falls back
 to the LLM backend for complex queries.
 """
 
-from ziggy.config import SHUTDOWN_PHRASE, RESOURCE_PROFILES, PROFILE_ALIASES
+from ziggy.config import (
+    SHUTDOWN_PHRASE, RESOURCE_PROFILES, PROFILE_ALIASES,
+    SYSTEM_PROMPT, THINK_TRIGGERS,
+)
+
+_ONLINE_SENTINEL = "i need online resources"
 
 
 class QueryRouter:
@@ -14,6 +19,13 @@ class QueryRouter:
         self.model = model
         self.profile_mgr = profile_mgr
         self.conversation = conversation
+
+    def get_system_prompt(self):
+        """Build the system prompt with current profile and model info."""
+        return SYSTEM_PROMPT.format(
+            profile_name=self.profile_mgr.settings["name"],
+            model_name=self.model,
+        )
 
     def route(self, text):
         """Route a query and return (route_type, response).
@@ -45,10 +57,10 @@ class QueryRouter:
                 return "local", response
 
         # Default: send to LLM
-        response = self._query_ai_local_only(text)
+        response = self._query_ai(text)
 
         # If the LLM says it needs online resources, try web search
-        if "i need online resources" in response.lower():
+        if _ONLINE_SENTINEL in response.lower():
             web_tool = self.tools.find_tool("search")
             if web_tool:
                 web_response = web_tool.handler(text)
@@ -81,22 +93,28 @@ class QueryRouter:
 
         return None
 
-    def _query_ai_local_only(self, text):
-        messages = [
-            {"role": "system",
-             "content": ("You are a local AI assistant. Answer questions using only your "
-                         "training data. If a question requires current information, real-time "
-                         "data, or internet searches, respond with exactly: "
-                         "'I need online resources to answer that properly.'")},
-            {"role": "user",
-             "content": f"Please provide a brief, spoken response to: {text}"},
-        ]
+    def _should_think(self, text):
+        """Check if the user wants the model to reason (standard/performance only)."""
+        if self.profile_mgr.current_profile == "minimal":
+            return False
+        text_lower = text.lower()
+        return any(trigger in text_lower for trigger in THINK_TRIGGERS)
+
+    def _query_ai(self, text):
+        """Send query to the LLM with the unified system prompt."""
+        use_thinking = self._should_think(text)
+
+        prompt = self.get_system_prompt()
+        messages = self.conversation.build_messages(text, system_prompt=prompt)
+
+        # Prepend /no_think unless the user asked for reasoning
+        if not use_thinking:
+            messages[-1]["content"] = "/no_think " + messages[-1]["content"]
+
         response = self.backend.query(
             messages, self.model,
             max_tokens=self.conversation.profile_settings.get("response_tokens", 1000),
         )
         if not response:
             return "Sorry, I couldn't process that request"
-        # The "I need online resources" path is preserved but simplified
-        # Full permission flow will be re-added via tools
         return response

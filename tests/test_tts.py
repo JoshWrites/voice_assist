@@ -42,23 +42,21 @@ class TestEspeakTTS:
         assert engine._generate_wav("hello") is None
 
     @patch.object(EspeakTTS, "_play_wav_bytes")
-    @patch("ziggy.tts.espeak.subprocess.run")
-    def test_speak_sentence_async(self, mock_run, mock_play):
-        mock_run.return_value = MagicMock(returncode=0, stdout=b"RIFF_wav_data")
+    @patch.object(EspeakTTS, "_generate_wav", return_value=b"RIFF_wav_data")
+    def test_speak_sentence_async(self, mock_gen, mock_play):
         engine = EspeakTTS()
         player, cleanup = engine.speak_sentence_async("hello")
         assert player is not None
         assert cleanup is None
-        # Player should have poll/terminate interface
         assert hasattr(player, "poll")
         assert hasattr(player, "terminate")
 
-    @patch("ziggy.tts.espeak.subprocess.run")
-    def test_speak_sentence_async_failure(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stdout=b"")
+    def test_speak_sentence_async_returns_player(self):
         engine = EspeakTTS()
-        process, cleanup = engine.speak_sentence_async("hello")
-        assert process is None
+        # Even with no espeak, player is returned (generation happens in thread)
+        player, cleanup = engine.speak_sentence_async("hello")
+        assert player is not None
+        assert hasattr(player, "poll")
 
 
 class TestCreateTTSEngine:

@@ -1,5 +1,6 @@
 """Hardware detection and resource profile management."""
 
+import glob as glob_mod
 import re
 import subprocess
 import sys
@@ -118,46 +119,49 @@ def _detect_gpu_memory():
 
     # AMD ROCm — pick the GPU with the most available VRAM
     try:
-        if subprocess.run(["which", "rocm-smi"], capture_output=True).returncode == 0:
-            result = subprocess.run(
-                ["rocm-smi", "--showmeminfo", "vram"],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0 and result.stdout:
-                gpu_total = {}
-                gpu_used = {}
-                for line in result.stdout.split("\n"):
-                    m = re.search(r"GPU\[(\d+)\].*VRAM Total Memory \(B\):\s*(\d+)", line)
-                    if m:
-                        gpu_total[m.group(1)] = int(m.group(2))
-                    m = re.search(r"GPU\[(\d+)\].*VRAM Total Used Memory \(B\):\s*(\d+)", line)
-                    if m:
-                        gpu_used[m.group(1)] = int(m.group(2))
-                best_available = 0
-                best_gpu = None
-                for gpu_id, total in gpu_total.items():
-                    used = gpu_used.get(gpu_id, 0)
-                    avail = total - used
-                    if avail > best_available:
-                        best_available = avail
-                        best_gpu = gpu_id
-                if best_gpu is not None:
-                    available_mb = best_available // (1024 * 1024)
-                    total_mb = gpu_total[best_gpu] // (1024 * 1024)
-                    print(f"  AMD GPU[{best_gpu}] selected: {available_mb}MB available ({total_mb}MB total)")
-                    return available_mb
+        result = subprocess.run(
+            ["rocm-smi", "--showmeminfo", "vram"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout:
+            gpu_total = {}
+            gpu_used = {}
+            for line in result.stdout.split("\n"):
+                m = re.search(r"GPU\[(\d+)\].*VRAM Total Memory \(B\):\s*(\d+)", line)
+                if m:
+                    gpu_total[m.group(1)] = int(m.group(2))
+                m = re.search(r"GPU\[(\d+)\].*VRAM Total Used Memory \(B\):\s*(\d+)", line)
+                if m:
+                    gpu_used[m.group(1)] = int(m.group(2))
+            best_available = 0
+            best_gpu = None
+            for gpu_id, total in gpu_total.items():
+                used = gpu_used.get(gpu_id, 0)
+                avail = total - used
+                if avail > best_available:
+                    best_available = avail
+                    best_gpu = gpu_id
+            if best_gpu is not None:
+                available_mb = best_available // (1024 * 1024)
+                total_mb = gpu_total[best_gpu] // (1024 * 1024)
+                print(f"  AMD GPU[{best_gpu}] selected: {available_mb}MB available ({total_mb}MB total)")
+                return available_mb
     except Exception:
         pass
 
-    # AMD sysfs fallback
+    # AMD sysfs fallback — pick the GPU with the most VRAM
     try:
-        import glob as glob_mod
         cards = glob_mod.glob("/sys/class/drm/card*/device/mem_info_vram_total")
         if cards:
-            with open(cards[0]) as f:
-                mb = int(f.read().strip()) // (1024 * 1024)
-                print(f"  AMD GPU via sysfs: {mb}MB total ({mb / 1024:.1f}GB)")
-                return mb
+            best_mb = 0
+            for card_path in cards:
+                with open(card_path) as f:
+                    mb = int(f.read().strip()) // (1024 * 1024)
+                    if mb > best_mb:
+                        best_mb = mb
+            if best_mb > 0:
+                print(f"  AMD GPU via sysfs: {best_mb}MB total ({best_mb / 1024:.1f}GB)")
+                return best_mb
     except Exception:
         pass
 

@@ -43,16 +43,21 @@ class AudioManager:
             return False
 
     def _find_best_input(self):
-        """Pick the first USB mic, preferring webcam/headset over onboard."""
-        usb_devices = []
+        """Pick the best USB mic — prefer webcam, then headset, then any USB."""
+        webcams = []
+        other_usb = []
         for i in range(self.audio.get_device_count()):
             info = self.audio.get_device_info_by_index(i)
             if info["maxInputChannels"] > 0 and "hw:" in info["name"]:
                 name = info["name"].lower()
-                if "webcam" in name or "usb" in name or "jabra" in name:
-                    usb_devices.append((i, info["name"]))
-        if usb_devices:
-            return usb_devices[0][0]
+                if "webcam" in name:
+                    webcams.append(i)
+                elif "usb" in name or "jabra" in name or "headset" in name:
+                    other_usb.append(i)
+        if webcams:
+            return webcams[0]
+        if other_usb:
+            return other_usb[0]
         return None
 
     def _open_input_stream(self):
@@ -239,13 +244,13 @@ class AudioManager:
 
                     if len(buffer) >= self.chunk_size * chunks_per_pass:
                         if recognizer.AcceptWaveform(buffer):
-                            result = json.loads(recognizer.Result())
-                            if result.get("text"):
-                                transcript = result["text"].lower().strip()
-                                if WAKE_WORD in transcript:
-                                    interruption_queue.put(True)
-                                    stop_event.set()
-                                    break
+                            text = json.loads(recognizer.Result()).get("text", "").lower()
+                        else:
+                            text = json.loads(recognizer.PartialResult()).get("partial", "").lower()
+                        if WAKE_WORD in text:
+                            interruption_queue.put(True)
+                            stop_event.set()
+                            break
                         buffer = b""
 
                 except Exception as e:

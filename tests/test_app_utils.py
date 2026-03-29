@@ -58,3 +58,32 @@ class TestContainsQuestion:
 
     def test_empty_string(self):
         assert _contains_question("") is False
+
+
+from ziggy.app import VoiceAssistant
+
+
+class TestExtractName:
+    def test_im_prefix(self):
+        assert VoiceAssistant._extract_name("I'm Josh") == "Josh"
+
+    def test_my_name_is_prefix(self):
+        assert VoiceAssistant._extract_name("my name is Maya") == "Maya"
+
+    def test_i_am_prefix(self):
+        assert VoiceAssistant._extract_name("I am David") == "David"
+
+    def test_single_word(self):
+        assert VoiceAssistant._extract_name("Josh") == "Josh"
+
+    def test_two_words(self):
+        assert VoiceAssistant._extract_name("josh levine") == "Josh Levine"
+
+    def test_long_sentence_returns_none(self):
+        assert VoiceAssistant._extract_name("I don't want to tell you my name") is None
+
+    def test_empty_string(self):
+        assert VoiceAssistant._extract_name("") is None
+
+    def test_capitalizes(self):
+        assert VoiceAssistant._extract_name("i'm josh") == "Josh"

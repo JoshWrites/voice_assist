@@ -68,6 +68,7 @@ RESOURCE_PROFILES = {
         "response_tokens": 2000,
         "recording_conversational": 600,  # 10 minutes
         "recording_command": 60,
+        "tts_engine": "voxtral",  # Use Voxtral TTS for high-quality voice
     }
 }
 
@@ -94,6 +95,12 @@ class VoiceAssistant:
         self.backend_process = None  # Store process if we start it
         self.msty_url = "http://localhost:10000"
         self.ollama_url = "http://localhost:11434"
+
+        # Voxtral TTS configuration
+        self.voxtral_url = "http://localhost:8000"
+        self.voxtral_available = False
+        self.voxtral_voice = "casual_male"  # Default voice
+        self.voxtral_process = None
 
         # Audio configuration
         self.sample_rate = 16000
@@ -170,8 +177,12 @@ class VoiceAssistant:
                 except Exception:
                     pass
             
+            # Check for Voxtral TTS if performance profile
+            if self.profile_settings.get('tts_engine') == 'voxtral':
+                self.setup_voxtral_tts()
+
             # Fallback to espeak
-            if not self.piper_available:
+            if not self.piper_available and not self.voxtral_available:
                 try:
                     result = subprocess.run(['which', 'espeak'], capture_output=True, text=True)
                     if result.returncode == 0:
@@ -552,6 +563,92 @@ class VoiceAssistant:
             "percent": percent_used
         }
 
+    def setup_voxtral_tts(self):
+        """Setup Voxtral TTS - check if vLLM server is running or start it"""
+        print("🔍 Checking for Voxtral TTS server...")
+
+        # Check if vLLM with Voxtral is already running
+        try:
+            response = requests.get(f"{self.voxtral_url}/v1/models", timeout=3)
+            if response.status_code == 200:
+                models = response.json()
+                for model in models.get('data', []):
+                    if 'voxtral' in model.get('id', '').lower() or 'tts' in model.get('id', '').lower():
+                        self.voxtral_available = True
+                        print(f"✅ Voxtral TTS ready (voice: {self.voxtral_voice})")
+                        return
+                # Server running but no Voxtral model loaded
+                print("⚠️ vLLM server running but Voxtral model not found")
+        except requests.exceptions.ConnectionError:
+            print("⚠️ Voxtral TTS server not running at localhost:8000")
+        except Exception as e:
+            print(f"⚠️ Voxtral TTS check failed: {e}")
+
+        print("ℹ️ To enable Voxtral TTS, start the server with:")
+        print("   pip install -U vllm && pip install git+https://github.com/vllm-project/vllm-omni.git")
+        print("   vllm serve mistralai/Voxtral-4B-TTS-2603 --omni")
+        print("ℹ️ Falling back to Piper/espeak for TTS")
+
+    def speak_voxtral(self, text):
+        """Synthesize speech using Voxtral TTS via vLLM server"""
+        try:
+            response = requests.post(
+                f"{self.voxtral_url}/v1/audio/speech",
+                json={
+                    "model": "mistralai/Voxtral-4B-TTS-2603",
+                    "input": text,
+                    "voice": self.voxtral_voice,
+                    "response_format": "wav",
+                },
+                timeout=30,
+            )
+            if response.status_code == 200:
+                # Write to temp file and play with aplay
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                    tmp.write(response.content)
+                    tmp_path = tmp.name
+                process = subprocess.Popen(
+                    ['aplay', tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                process.wait()
+                os.unlink(tmp_path)
+                return True
+            else:
+                print(f"⚠️ Voxtral TTS error: HTTP {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"⚠️ Voxtral TTS failed: {e}")
+            return False
+
+    def speak_voxtral_sentence(self, sentence):
+        """Synthesize a sentence with Voxtral, return the subprocess for interruption support"""
+        try:
+            response = requests.post(
+                f"{self.voxtral_url}/v1/audio/speech",
+                json={
+                    "model": "mistralai/Voxtral-4B-TTS-2603",
+                    "input": sentence,
+                    "voice": self.voxtral_voice,
+                    "response_format": "wav",
+                },
+                timeout=30,
+            )
+            if response.status_code == 200:
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                    tmp.write(response.content)
+                    tmp_path = tmp.name
+                process = subprocess.Popen(
+                    ['aplay', tmp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                return process, tmp_path
+            return None, None
+        except Exception:
+            return None, None
+
     def get_default_model(self):
         """Get the default model for the current backend"""
         try:
@@ -655,7 +752,11 @@ class VoiceAssistant:
 
             if not allow_interruption or len(text) < 100:
                 # Short responses - speak normally without interruption
-                if self.piper_available:
+                if self.voxtral_available:
+                    if not self.speak_voxtral(text):
+                        # Voxtral failed, fall through to Piper/espeak
+                        self._speak_fallback(text)
+                elif self.piper_available:
                     # Use Piper for natural voice
                     # Escape single quotes in text
                     escaped_text = text.replace("'", "'\"'\"'")
@@ -690,6 +791,49 @@ class VoiceAssistant:
             print(f"Speech error: {e}")
             return False
 
+    def _speak_fallback_process(self, text):
+        """Return a fallback TTS subprocess (for interruption loop)"""
+        if self.piper_available:
+            escaped_text = text.replace("'", "'\"'\"'")
+            piper_process = subprocess.Popen(
+                f"echo '{escaped_text}' | {self.piper_path} --model {self.piper_model} --output-raw",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            return subprocess.Popen(
+                ['aplay', '-r', '22050', '-f', 'S16_LE', '-t', 'raw', '-'],
+                stdin=piper_process.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        else:
+            return subprocess.Popen([
+                'espeak', '-s', '150', '-v', 'en', text
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _speak_fallback(self, text):
+        """Fallback TTS when Voxtral fails mid-session"""
+        if self.piper_available:
+            escaped_text = text.replace("'", "'\"'\"'")
+            process = subprocess.Popen(
+                f"echo '{escaped_text}' | {self.piper_path} --model {self.piper_model} --output-raw",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            play_process = subprocess.Popen(
+                ['aplay', '-r', '22050', '-f', 'S16_LE', '-t', 'raw', '-'],
+                stdin=process.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            play_process.wait()
+        else:
+            subprocess.run([
+                'espeak', '-s', '150', '-v', 'en', text
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def speak_with_interruption(self, text):
         """Speak text while listening for 'ziggy' interruption"""
         try:
@@ -714,10 +858,16 @@ class VoiceAssistant:
                     print("🛑 Speech interrupted by wake word")
                     break
 
+                tmp_path = None  # Track temp files for Voxtral cleanup
+
                 # Speak this sentence
-                if self.piper_available:
+                if self.voxtral_available:
+                    process, tmp_path = self.speak_voxtral_sentence(sentence.strip())
+                    if process is None:
+                        # Voxtral failed, fall back for this sentence
+                        process = self._speak_fallback_process(sentence.strip())
+                elif self.piper_available:
                     # Use Piper
-                    # Escape single quotes in sentence
                     escaped_sentence = sentence.strip().replace("'", "'\"'\"'")
                     piper_process = subprocess.Popen(
                         f"echo '{escaped_sentence}' | {self.piper_path} --model {self.piper_model} --output-raw",
@@ -741,12 +891,24 @@ class VoiceAssistant:
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 # Wait for sentence to finish, checking for interruption
-                while process.poll() is None:
+                while process and process.poll() is None:
                     if stop_speaking.is_set():
                         process.terminate()
+                        if tmp_path:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
                         print("🛑 Speech interrupted mid-sentence")
                         break
                     time.sleep(0.1)
+
+                # Clean up Voxtral temp file
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
             # Stop the listener
             stop_speaking.set()

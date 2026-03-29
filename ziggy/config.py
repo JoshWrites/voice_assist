@@ -11,6 +11,7 @@ RESOURCE_PROFILES = {
         "recording_conversational": 120,
         "recording_command": 30,
         "tts_engine": "espeak",
+        "speaker_tracking": False,
     },
     "standard": {
         "name": "Standard",
@@ -22,6 +23,7 @@ RESOURCE_PROFILES = {
         "recording_conversational": 300,
         "recording_command": 60,
         "tts_engine": "piper",
+        "speaker_tracking": True,
     },
     "performance": {
         "name": "Performance",
@@ -33,6 +35,7 @@ RESOURCE_PROFILES = {
         "recording_conversational": 600,
         "recording_command": 60,
         "tts_engine": "voxtral",
+        "speaker_tracking": True,
     },
 }
 
@@ -82,7 +85,11 @@ You have these tools available — offer them when relevant:
 If a question needs real-time information you don't have, say exactly: \
 "I Need Online Resources to answer that properly."
 
-Don't make up facts. If you're unsure, say so.\
+Don't make up facts. If you're unsure, say so.
+
+When transcripts include speaker labels (like "Josh:" or "Speaker 2:"), \
+you're hearing from different people. Use their names when known. \
+If someone introduces themselves, remember their name for this conversation.\
 """
 
 # Phrases that trigger reasoning mode (drops /no_think for that exchange)

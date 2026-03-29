@@ -17,7 +17,7 @@ class TestResourceProfiles:
         required = [
             "name", "description", "context_tokens", "history_limit",
             "response_tokens", "recording_conversational", "recording_command",
-            "tts_engine",
+            "tts_engine", "speaker_tracking",
         ]
         for profile_name, profile in RESOURCE_PROFILES.items():
             for key in required:
@@ -32,6 +32,15 @@ class TestResourceProfiles:
         assert RESOURCE_PROFILES["minimal"]["history_limit"] < \
                RESOURCE_PROFILES["standard"]["history_limit"] < \
                RESOURCE_PROFILES["performance"]["history_limit"]
+
+    def test_minimal_has_no_speaker_tracking(self):
+        assert RESOURCE_PROFILES["minimal"]["speaker_tracking"] is False
+
+    def test_standard_has_speaker_tracking(self):
+        assert RESOURCE_PROFILES["standard"]["speaker_tracking"] is True
+
+    def test_performance_has_speaker_tracking(self):
+        assert RESOURCE_PROFILES["performance"]["speaker_tracking"] is True
 
 
 class TestProfileAliases:

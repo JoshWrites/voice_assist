@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+import requests
+
 from ziggy.config import WAKE_WORD, SHUTDOWN_PHRASE
 from ziggy.profile import ProfileManager
 from ziggy.stt import SpeechRecognizer
@@ -153,18 +155,38 @@ class VoiceAssistant:
         """Pick the right model for the current profile.
 
         If Ringmaster is the backend, use its session system to load the
-        profile-appropriate model. Otherwise, use whatever Ollama has loaded.
+        profile-appropriate model. For direct Ollama/Msty, pick the
+        profile-appropriate model if available, else use whatever's loaded.
         """
+        from ziggy.backend.ringmaster import PROFILE_MODELS
+
         if isinstance(self.backend, RingmasterBackend):
             model = self.backend.select_model_for_profile(self.profile.current_profile)
             if self.backend.open_session(model):
                 return model
             print("  Ringmaster session failed, falling back to direct Ollama")
-            # Fall through to direct Ollama
-            from ziggy.backend.ollama import OllamaBackend
             self.backend = OllamaBackend()
             if not self.backend.is_running():
                 self.backend.start()
+
+        # Direct Ollama/Msty — try to use the profile-appropriate model
+        preferred = PROFILE_MODELS.get(self.profile.current_profile)
+        if preferred:
+            try:
+                resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+                if resp.status_code == 200:
+                    available = [m["name"] for m in resp.json().get("models", [])]
+                    if preferred in available:
+                        print(f"  Loading profile model: {preferred}")
+                        # Tell Ollama to load it
+                        requests.post(
+                            "http://localhost:11434/api/generate",
+                            json={"model": preferred, "prompt": "", "stream": False},
+                            timeout=120,
+                        )
+                        return preferred
+            except Exception as e:
+                print(f"  Could not load profile model: {e}")
 
         return self.backend.get_default_model()
 

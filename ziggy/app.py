@@ -18,6 +18,7 @@ from ziggy.stt import SpeechRecognizer
 from ziggy.audio import AudioManager
 from ziggy.tts import create_tts_engine
 from ziggy.backend import detect_backend
+from ziggy.backend.ringmaster import RingmasterBackend
 from ziggy.backend.msty import MstyBackend
 from ziggy.backend.ollama import OllamaBackend
 from ziggy.conversation import ConversationManager
@@ -69,7 +70,7 @@ class VoiceAssistant:
             if not self._setup_backend():
                 return
 
-            self.model = self.backend.get_default_model()
+            self.model = self._select_model()
             print(f"  Using model: {self.model}")
 
             self.tts = create_tts_engine(self.profile.settings)
@@ -147,6 +148,25 @@ class VoiceAssistant:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return True
+
+    def _select_model(self):
+        """Pick the right model for the current profile.
+
+        If Ringmaster is the backend, use its session system to load the
+        profile-appropriate model. Otherwise, use whatever Ollama has loaded.
+        """
+        if isinstance(self.backend, RingmasterBackend):
+            model = self.backend.select_model_for_profile(self.profile.current_profile)
+            if self.backend.open_session(model):
+                return model
+            print("  Ringmaster session failed, falling back to direct Ollama")
+            # Fall through to direct Ollama
+            from ziggy.backend.ollama import OllamaBackend
+            self.backend = OllamaBackend()
+            if not self.backend.is_running():
+                self.backend.start()
+
+        return self.backend.get_default_model()
 
     def _register_tools(self):
         """Register all built-in tools."""

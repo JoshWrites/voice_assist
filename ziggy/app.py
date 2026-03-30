@@ -12,17 +12,21 @@ import sys
 import threading
 import time
 
+import requests
+
 from ziggy.config import WAKE_WORD, SHUTDOWN_PHRASE
 from ziggy.profile import ProfileManager
 from ziggy.stt import SpeechRecognizer
 from ziggy.audio import AudioManager
 from ziggy.tts import create_tts_engine
 from ziggy.backend import detect_backend
+from ziggy.backend.ringmaster import RingmasterBackend
 from ziggy.backend.msty import MstyBackend
 from ziggy.backend.ollama import OllamaBackend
 from ziggy.conversation import ConversationManager
 from ziggy.router import QueryRouter
 from ziggy.tools import ToolRegistry
+from ziggy.speaker import SpeakerTracker
 from ziggy.tools import time_date as time_date_tools
 from ziggy.tools import conversions as conversion_tools
 from ziggy.tools import web_search as web_search_tools
@@ -47,6 +51,7 @@ class VoiceAssistant:
         self.conversation = None
         self.router = None
         self.tools = ToolRegistry()
+        self.speaker = None
 
         print("Initializing Ziggy Voice Assistant...")
         self._setup()
@@ -67,11 +72,16 @@ class VoiceAssistant:
             if not self._setup_backend():
                 return
 
-            self.model = self.backend.get_default_model()
+            self.model = self._select_model()
             print(f"  Using model: {self.model}")
 
             self.tts = create_tts_engine(self.profile.settings)
             self.conversation = ConversationManager(self.profile.settings)
+
+            if self.profile.settings.get("speaker_tracking"):
+                self.speaker = SpeakerTracker()
+                if not self.speaker.setup():
+                    self.speaker = None
 
             self._register_tools()
 
@@ -140,6 +150,45 @@ class VoiceAssistant:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return True
+
+    def _select_model(self):
+        """Pick the right model for the current profile.
+
+        If Ringmaster is the backend, use its session system to load the
+        profile-appropriate model. For direct Ollama/Msty, pick the
+        profile-appropriate model if available, else use whatever's loaded.
+        """
+        from ziggy.backend.ringmaster import PROFILE_MODELS
+
+        if isinstance(self.backend, RingmasterBackend):
+            model = self.backend.select_model_for_profile(self.profile.current_profile)
+            if self.backend.open_session(model):
+                return model
+            print("  Ringmaster session failed, falling back to direct Ollama")
+            self.backend = OllamaBackend()
+            if not self.backend.is_running():
+                self.backend.start()
+
+        # Direct Ollama/Msty — try to use the profile-appropriate model
+        preferred = PROFILE_MODELS.get(self.profile.current_profile)
+        if preferred:
+            try:
+                resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+                if resp.status_code == 200:
+                    available = [m["name"] for m in resp.json().get("models", [])]
+                    if preferred in available:
+                        print(f"  Loading profile model: {preferred}")
+                        # Tell Ollama to load it
+                        requests.post(
+                            "http://localhost:11434/api/generate",
+                            json={"model": preferred, "prompt": "", "stream": False},
+                            timeout=120,
+                        )
+                        return preferred
+            except Exception as e:
+                print(f"  Could not load profile model: {e}")
+
+        return self.backend.get_default_model()
 
     def _register_tools(self):
         """Register all built-in tools."""
@@ -240,13 +289,21 @@ class VoiceAssistant:
                 self.speak("I didn't hear anything", allow_interruption=False)
                 return
 
+            speaker_label = None
+            if self.speaker and self.speaker.is_active():
+                speaker_label = self.speaker.identify(audio_data, self.audio.sample_rate)
+
             command_text = self.stt.transcribe(audio_data, self.audio.get_sample_size())
             if not command_text:
                 self.speak("I couldn't understand that", allow_interruption=False)
                 return
 
-            print(f"Command: '{command_text}'")
-            route_type, response = self.router.route(command_text)
+            if speaker_label:
+                labeled_text = f"{speaker_label}: {command_text}"
+            else:
+                labeled_text = command_text
+            print(f"Command: '{labeled_text}'")
+            route_type, response = self.router.route(command_text, speaker_label=speaker_label)
 
             if route_type == "shutdown":
                 self.speak(response, allow_interruption=False)
@@ -254,12 +311,26 @@ class VoiceAssistant:
                 return
 
             if route_type == "ai":
-                self.conversation.add_exchange(command_text, response)
+                self.conversation.add_exchange(labeled_text, response)
 
             was_interrupted = self.speak(response, allow_interruption=True)
+
+            new_speaker = (
+                speaker_label
+                and speaker_label.startswith("Speaker ")
+                and self.speaker
+                and self.speaker.is_active()
+            )
+
             if was_interrupted:
                 self._handle_voice_command()
                 return
+
+            if new_speaker and not was_interrupted:
+                self._ask_speaker_name(
+                    "By the way, I don't think we've met. I'm Ziggy — what's your name?",
+                    speaker_id=speaker_label,
+                )
 
             # Conversational follow-up loop
             if _contains_question(response):
@@ -287,11 +358,16 @@ class VoiceAssistant:
             if not audio:
                 break
 
+            speaker_label = None
+            if self.speaker and self.speaker.is_active():
+                speaker_label = self.speaker.identify(audio, self.audio.sample_rate)
+
             text = self.stt.transcribe(audio, self.audio.get_sample_size())
             if not text:
                 break
 
-            print(f"User answered: '{text}'")
+            labeled_text = f"{speaker_label}: {text}" if speaker_label else text
+            print(f"User answered: '{labeled_text}'")
             if SHUTDOWN_PHRASE in text.lower():
                 self.speak("Okay, bye!", allow_interruption=False)
                 self._shutdown()
@@ -304,10 +380,12 @@ class VoiceAssistant:
                 messages, self.model, temperature=0.8,
                 max_tokens=self.conversation.profile_settings.get("response_tokens", 1000),
             )
+            if ai_response:
+                ai_response = self._strip_think_tags(ai_response)
             if not ai_response:
                 break
 
-            self.conversation.add_exchange(text, ai_response)
+            self.conversation.add_exchange(labeled_text, ai_response)
             was_interrupted = self.speak(ai_response, allow_interruption=True)
 
             if was_interrupted or not _contains_question(ai_response):
@@ -327,9 +405,71 @@ class VoiceAssistant:
         print(msg)
         self.speak(msg, allow_interruption=False)
 
+        if self.speaker and self.speaker.is_active():
+            self._ask_speaker_name("Hi, I'm Ziggy. What's your name?")
+
+        self.last_interaction_time = time.time()
+
+    def _ask_speaker_name(self, prompt_text, speaker_id=None, max_attempts=2):
+        """Ask for a speaker's name, using the LLM to extract it from the response."""
+        for attempt in range(max_attempts):
+            self.speak(prompt_text, allow_interruption=False)
+            audio = self.audio.record_command(profile_settings=self.profile.settings)
+            if not audio:
+                break
+
+            # Identify the speaker voice if not already known
+            if speaker_id is None and self.speaker:
+                speaker_id = self.speaker.identify(audio, self.audio.sample_rate)
+
+            text = self.stt.transcribe(audio, self.audio.get_sample_size())
+            if not text:
+                prompt_text = "Sorry, I didn't catch that. What's your name?"
+                continue
+
+            print(f"  Name response heard: '{text}'")
+            name = self._extract_name_via_llm(text)
+            print(f"  LLM extracted name: '{name}' (speaker: {speaker_id})")
+
+            if name and speaker_id:
+                self.speaker.set_name(speaker_id, name)
+                self.speak(f"Nice to meet you, {name}! So, {name}, what's on your mind?",
+                           allow_interruption=False)
+                return
+            else:
+                prompt_text = "Sorry, I didn't catch that. What's your name?"
+
+        self.speak("No worries. Let's get started!", allow_interruption=False)
+
+    def _extract_name_via_llm(self, text):
+        """Use the LLM to extract a person's name from their response."""
+        messages = [
+            {"role": "system",
+             "content": "Extract the person's name from the following text. "
+                        "Reply with ONLY the name, nothing else. "
+                        "If no name is present, reply with exactly: NONE"},
+            {"role": "user", "content": f"/no_think {text}"},
+        ]
+        response = self.backend.query(messages, self.model, max_tokens=20)
+        if response:
+            response = self._strip_think_tags(response)
+            name = response.strip().strip('"').strip("'").strip(".")
+            if name and name.upper() != "NONE" and 1 <= len(name.split()) <= 3:
+                return name
+        return None
+
+    @staticmethod
+    def _strip_think_tags(text):
+        """Remove <think>...</think> blocks from LLM responses."""
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
     def _shutdown(self):
         print("Shutting down Ziggy...")
         self.is_listening = False
+
+        # Close Ringmaster session if active
+        if isinstance(self.backend, RingmasterBackend):
+            self.backend.close_session()
 
         if hasattr(self.backend, "was_started_by_us") and self.backend.was_started_by_us:
             self.speak(

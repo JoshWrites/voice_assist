@@ -1,5 +1,7 @@
 """Tests for utility functions in ziggy.app."""
 
+from unittest.mock import MagicMock, patch
+
 from ziggy.app import _split_into_sentences, _contains_question
 
 
@@ -15,9 +17,7 @@ class TestSplitIntoSentences:
         assert len(result) >= 2
 
     def test_short_sentences_merged(self):
-        # Sentences with fewer than 5 words get merged with next
         result = _split_into_sentences("Hi. How are you doing today.")
-        # "Hi. " is < 5 words, should merge with next
         assert len(result) <= 2
 
     def test_empty_string(self):
@@ -50,7 +50,6 @@ class TestContainsQuestion:
             assert _contains_question(f"{word} is the answer.") is True
 
     def test_starter_mid_sentence_not_matched(self):
-        # "I know what happened." — "what" is not at start of sentence
         assert _contains_question("I know that happened.") is False
 
     def test_multiple_sentences_one_question(self):

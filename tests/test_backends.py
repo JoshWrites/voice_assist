@@ -165,6 +165,7 @@ class TestMstyBackend:
 
 
 class TestDetectBackend:
+    @patch("ziggy.backend.ringmaster.RingmasterBackend.is_running", return_value=False)
     @patch("ziggy.backend.msty.MstyBackend.is_running", return_value=False)
     @patch("ziggy.backend.ollama.OllamaBackend.is_running", return_value=True)
     def test_detects_ollama(self, *_):
@@ -172,12 +173,14 @@ class TestDetectBackend:
         assert backend is not None
         assert backend.name == "Ollama"
 
+    @patch("ziggy.backend.ringmaster.RingmasterBackend.is_running", return_value=False)
     @patch("ziggy.backend.msty.MstyBackend.is_running", return_value=True)
     def test_detects_msty_first(self, *_):
         backend = detect_backend()
         assert backend is not None
         assert backend.name == "Msty"
 
+    @patch("ziggy.backend.ringmaster.RingmasterBackend.is_running", return_value=False)
     @patch("ziggy.backend.msty.MstyBackend.is_running", return_value=False)
     @patch("ziggy.backend.ollama.OllamaBackend.is_running", return_value=False)
     def test_returns_none_when_nothing_running(self, *_):

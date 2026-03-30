@@ -33,10 +33,18 @@ class LLMBackend(abc.ABC):
 
 
 def detect_backend() -> Optional[LLMBackend]:
-    """Auto-detect a running LLM backend. Returns the first one found."""
+    """Auto-detect a running LLM backend. Tries Ringmaster first, then direct."""
+    from ziggy.backend.ringmaster import RingmasterBackend
     from ziggy.backend.msty import MstyBackend
     from ziggy.backend.ollama import OllamaBackend
 
+    # Try Ringmaster first — it manages GPU/model selection
+    rm = RingmasterBackend()
+    if rm.is_running():
+        print(f"  Connected to {rm.name} backend")
+        return rm
+
+    # Fall back to direct backend access
     for cls in [MstyBackend, OllamaBackend]:
         backend = cls()
         if backend.is_running():

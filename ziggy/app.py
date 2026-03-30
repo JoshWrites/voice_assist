@@ -285,16 +285,10 @@ class VoiceAssistant:
                 return
 
             if new_speaker and not was_interrupted:
-                self.speak("By the way, I don't think we've met. I'm Ziggy — what's your name?",
-                           allow_interruption=False)
-                name_audio = self.audio.record_command(profile_settings=self.profile.settings)
-                if name_audio:
-                    name_text = self.stt.transcribe(name_audio, self.audio.get_sample_size())
-                    if name_text:
-                        name = self._extract_name(name_text)
-                        if name:
-                            self.speaker.set_name(speaker_label, name)
-                            self.speak(f"Nice to meet you, {name}!", allow_interruption=False)
+                self._ask_speaker_name(
+                    "By the way, I don't think we've met. I'm Ziggy — what's your name?",
+                    speaker_id=speaker_label,
+                )
 
             # Conversational follow-up loop
             if _contains_question(response):
@@ -368,33 +362,53 @@ class VoiceAssistant:
         self.speak(msg, allow_interruption=False)
 
         if self.speaker and self.speaker.is_active():
-            self.speak("Hi, I'm Ziggy. What's your name?", allow_interruption=False)
-            audio = self.audio.record_command(profile_settings=self.profile.settings)
-            if audio:
-                speaker_label = self.speaker.identify(audio, self.audio.sample_rate)
-                name_text = self.stt.transcribe(audio, self.audio.get_sample_size())
-                if name_text:
-                    name = self._extract_name(name_text)
-                    if name and speaker_label:
-                        self.speaker.set_name(speaker_label, name)
-                        self.speak(f"Nice to meet you, {name}!", allow_interruption=False)
-                    else:
-                        self.speak("Nice to meet you!", allow_interruption=False)
-                else:
-                    self.speak("No worries. Let's get started!", allow_interruption=False)
+            self._ask_speaker_name("Hi, I'm Ziggy. What's your name?")
 
-    @staticmethod
-    def _extract_name(text):
-        """Try to extract a name from a response like 'I'm Josh' or 'my name is Josh'."""
-        text = text.strip()
-        for prefix in ["i'm ", "i am ", "my name is ", "it's ", "they call me ", "name's "]:
-            if text.lower().startswith(prefix):
-                name = text[len(prefix):].strip().split()[0] if text[len(prefix):].strip() else None
-                if name:
-                    return name.capitalize()
-        words = text.split()
-        if 1 <= len(words) <= 2:
-            return " ".join(w.capitalize() for w in words)
+    def _ask_speaker_name(self, prompt_text, speaker_id=None, max_attempts=2):
+        """Ask for a speaker's name, using the LLM to extract it from the response."""
+        for attempt in range(max_attempts):
+            self.speak(prompt_text, allow_interruption=False)
+            audio = self.audio.record_command(profile_settings=self.profile.settings)
+            if not audio:
+                break
+
+            # Identify the speaker voice if not already known
+            if speaker_id is None and self.speaker:
+                speaker_id = self.speaker.identify(audio, self.audio.sample_rate)
+
+            text = self.stt.transcribe(audio, self.audio.get_sample_size())
+            if not text:
+                prompt_text = "Sorry, I didn't catch that. What's your name?"
+                continue
+
+            print(f"  Name response heard: '{text}'")
+            name = self._extract_name_via_llm(text)
+            print(f"  LLM extracted name: '{name}' (speaker: {speaker_id})")
+
+            if name and speaker_id:
+                self.speaker.set_name(speaker_id, name)
+                self.speak(f"Nice to meet you, {name}! So, {name}, what's on your mind?",
+                           allow_interruption=False)
+                return
+            else:
+                prompt_text = "Sorry, I didn't catch that. What's your name?"
+
+        self.speak("No worries. Let's get started!", allow_interruption=False)
+
+    def _extract_name_via_llm(self, text):
+        """Use the LLM to extract a person's name from their response."""
+        messages = [
+            {"role": "system",
+             "content": "Extract the person's name from the following text. "
+                        "Reply with ONLY the name, nothing else. "
+                        "If no name is present, reply with exactly: NONE"},
+            {"role": "user", "content": text},
+        ]
+        response = self.backend.query(messages, self.model, max_tokens=20)
+        if response:
+            name = response.strip().strip('"').strip("'").strip(".")
+            if name.upper() != "NONE" and 1 <= len(name.split()) <= 3:
+                return name
         return None
 
     def _shutdown(self):

@@ -380,6 +380,8 @@ class VoiceAssistant:
                 messages, self.model, temperature=0.8,
                 max_tokens=self.conversation.profile_settings.get("response_tokens", 1000),
             )
+            if ai_response:
+                ai_response = self._strip_think_tags(ai_response)
             if not ai_response:
                 break
 
@@ -405,6 +407,8 @@ class VoiceAssistant:
 
         if self.speaker and self.speaker.is_active():
             self._ask_speaker_name("Hi, I'm Ziggy. What's your name?")
+
+        self.last_interaction_time = time.time()
 
     def _ask_speaker_name(self, prompt_text, speaker_id=None, max_attempts=2):
         """Ask for a speaker's name, using the LLM to extract it from the response."""
@@ -444,18 +448,28 @@ class VoiceAssistant:
              "content": "Extract the person's name from the following text. "
                         "Reply with ONLY the name, nothing else. "
                         "If no name is present, reply with exactly: NONE"},
-            {"role": "user", "content": text},
+            {"role": "user", "content": f"/no_think {text}"},
         ]
         response = self.backend.query(messages, self.model, max_tokens=20)
         if response:
+            response = self._strip_think_tags(response)
             name = response.strip().strip('"').strip("'").strip(".")
-            if name.upper() != "NONE" and 1 <= len(name.split()) <= 3:
+            if name and name.upper() != "NONE" and 1 <= len(name.split()) <= 3:
                 return name
         return None
+
+    @staticmethod
+    def _strip_think_tags(text):
+        """Remove <think>...</think> blocks from LLM responses."""
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     def _shutdown(self):
         print("Shutting down Ziggy...")
         self.is_listening = False
+
+        # Close Ringmaster session if active
+        if isinstance(self.backend, RingmasterBackend):
+            self.backend.close_session()
 
         if hasattr(self.backend, "was_started_by_us") and self.backend.was_started_by_us:
             self.speak(

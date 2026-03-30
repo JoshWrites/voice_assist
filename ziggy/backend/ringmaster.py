@@ -17,6 +17,7 @@ from ziggy.backend import LLMBackend
 
 DEFAULT_URL = "http://localhost:8420"
 CLIENT_ID = "ziggy-voice-assistant"
+TOKEN_ENV_VAR = "RINGMASTER_TOKEN"
 
 # Model recommendations per profile (VRAM-aware)
 PROFILE_MODELS = {
@@ -79,7 +80,8 @@ class RingmasterBackend(LLMBackend):
         try:
             resp = requests.get(f"{self.url}/models", headers=self._headers(), timeout=5)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                return data.get("models", []) if isinstance(data, dict) else data
         except Exception:
             pass
         return []
@@ -118,7 +120,7 @@ class RingmasterBackend(LLMBackend):
                 },
                 timeout=30,
             )
-            if resp.status_code == 200:
+            if resp.status_code in (200, 201):
                 data = resp.json()
                 self._session_id = data["id"]
                 self._session_model = model

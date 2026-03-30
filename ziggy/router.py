@@ -4,6 +4,8 @@ The router checks tool registry first (local tools), then falls back
 to the LLM backend for complex queries.
 """
 
+import re
+
 from ziggy.config import (
     SHUTDOWN_PHRASE, RESOURCE_PROFILES, PROFILE_ALIASES,
     SYSTEM_PROMPT, THINK_TRIGGERS,
@@ -118,4 +120,5 @@ class QueryRouter:
         )
         if not response:
             return "Sorry, I couldn't process that request"
-        return response
+        # Strip <think>...</think> tags that Qwen3 may emit even with /no_think
+        return re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
